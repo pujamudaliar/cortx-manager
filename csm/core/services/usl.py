@@ -23,7 +23,7 @@ from ipaddress import ip_address
 from random import SystemRandom
 from marshmallow import ValidationError
 from marshmallow.validate import URL
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4, uuid5
 
 from cortx.utils.conf_store.conf_store import Conf
@@ -376,12 +376,14 @@ class UslService(ApplicationService):
         :return: a dictionary with a management link's name and value.
         """
         ssl_check = Conf.get(const.CSM_GLOBAL_INDEX, 'CSM_SERVICE>CSM_WEB>ssl_check')
-        network_configuration = await self._provisioner.get_network_configuration()
+        scheme = 'https' if ssl_check else 'http'
+        ip = await self._get_public_ip()
+        if ip is None:
+            conf = await self._get_network_configuration()
+            ip = conf['mgmt_vip']
         port = \
             Conf.get(const.CSM_GLOBAL_INDEX, 'CSM_SERVICE>CSM_WEB>port') or const.WEB_DEFAULT_PORT
-        scheme = 'https' if ssl_check else 'http'
-        host = f'{network_configuration.mgmt_vip}'
-        url = scheme + '://' + host + ':' + str(port)
+        url = f'{scheme}://{ip}:{port}'
         mgmt_url = {
             'name': 'mgmtUrl',
             'url': url,
@@ -484,7 +486,7 @@ class UslService(ApplicationService):
             raise CsmNotFoundError(reason)
         return material
 
-    async def _get_public_ip(self) -> str:
+    async def _get_public_ip(self) -> Optional[str]:
         """
         Reads UDS public IP from global index in an attempt to override UDS default behavior.
         If it is not found, uses cluster IP as UDS public IP.
@@ -496,17 +498,23 @@ class UslService(ApplicationService):
             ip_address(ip)
             return ip
         except ValueError as e:
-            reason = 'UDS public IP override failed---following usual code path'
+            reason = 'UDS public IP override is not configured'
             Log.debug(f'{reason}. Error: {e}')
+        return None
+
+    async def _get_network_configuration(self) -> Dict[str, str]:
         try:
             conf = await self._provisioner.get_network_configuration()
-            ip = conf.cluster_ip
-            ip_address(ip)
-            return ip
+            ip_address(conf.mgmt_vip)
+            ip_address(conf.cluster_ip)
         except (ValueError, NetworkConfigFetchError) as e:
             reason = 'Could not obtain network configuration from provisioner'
             Log.error(f'{reason}: {e}')
             raise CsmInternalError(reason) from e
+        return {
+            'mgmt_vip': conf.mgmt_vip,
+            'cluster_ip': conf.cluster_ip,
+        }
 
     async def get_network_interfaces(self) -> List[Dict[str, Any]]:
         """
@@ -517,6 +525,9 @@ class UslService(ApplicationService):
         """
         try:
             ip = await self._get_public_ip()
+            if ip is None:
+                conf = await self._get_network_configuration()
+                ip = conf['cluster_ip']
             iface_data = get_interface_details(ip)
         except (ValueError, RuntimeError) as e:
             reason = f'Could not obtain interface details from address {ip}'
