@@ -53,11 +53,11 @@ class Configure(Setup):
             Log.error(f"Configuration Loading Failed {e}")
         self._set_deployment_mode()
         try:
+            uds_public_ip = command.options.get('uds_public_ip')
+            if uds_public_ip is not None:
+                ip_address(uds_public_ip)
+            Configure._configure_uds(uds_public_ip, self._is_env_vm)
             if not self._is_env_vm:
-                uds_public_ip = command.options.get('uds_public_ip')
-                if uds_public_ip is not None:
-                    ip_address(uds_public_ip)
-                UDSConfigGenerator.apply(uds_public_ip=uds_public_ip)
                 Configure._set_healthmap_path()
             Configure._set_node_id()
             machine_id = Setup._get_machine_id()
@@ -315,3 +315,13 @@ class Configure(Setup):
             Conf.set(const.CSM_GLOBAL_INDEX, conf_key, node_id_list.sort())
         except KvError as e:
             raise CsmSetupError(f"Setting RMQ cluster nodes failed {e}.")
+
+    @staticmethod
+    def _configure_uds(uds_public_ip, is_vm):
+        if is_vm and uds_public_ip is None:
+            warn_msg = 'UDS public IP is required on VM setups.  ' \
+                'Default configuration using cluster IP will be skipped.  ' \
+                'This behavior is deprecated and will be removed soon.'
+            Log.warn(warn_msg)
+        else:
+            UDSConfigGenerator.apply(uds_public_ip=uds_public_ip)
